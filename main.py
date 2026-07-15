@@ -1,130 +1,77 @@
-# PHẦN 1: BÁO CÁO LỖI LOGIC NGHIỆP VỤ (CHỈ RA 4 LỖI LOGIC CHÍNH)
+"""  
+Lỗi 1: Lỗi đồng bộ ngược (Lỗi ở quan hệ 1 - N) 
+    - Lỗi: students = relationship("Student", back_populates="department_id")
+    - Nguyên nhân: back_populates yêu cầu phải trỏ đến tên thuộc tính quan hệ (relationship) ở class đối diện, chứ không phải tên cột khóa ngoại (Column).
+    -> Sửa: students = relationship("Student", back_populates="department")
+
+Lỗi 2: Lỗi cấu hình collection (Lỗi ở quan hệ 1 - 1) 
+    - Lỗi: profile = relationship("Profile", back_populates="student")
+    - Nguyên nhân: Mặc định, hàm relationship() trong SQLAlchemy sẽ coi mọi liên kết là quan hệ 1-N (trả về một danh sách/list các đối tượng).
+    -> Sửa: profile = relationship("Profile", back_populates="student", uselist=False)
+
+Lỗi 3: Thiếu cấu hình bảng trung gian secondary (Lỗi ở quan hệ N - N) 
+    - Lỗi:
+        courses = relationship("Course", back_populates="students") # Ở class Student
+        students = relationship("Student", back_populates="courses") # Ở class Course
+
+    - Nguyên nhân: Quan hệ Nhiều - Nhiều, SQLAlchemy không thể tự động biết dữ liệu liên kết được lưu ở đâu nếu không có bảng trung gian.
+    -> Sửa: 
+        courses = relationship("Course", secondary=student_course, back_populates="students")
+
+        students = relationship("Student", secondary=student_course, back_populates="courses")
+
 """
------------------------------------------------------------------------------------------------------------------------------------------
-STT | Lỗi Logic Phát Hiện                   | Kết Quả Thực Tế                 | Kết Quả Mong Đợi               | Nguyên Nhân Gây Lỗi TRONG CODE CŨ
-----|---------------------------------------|---------------------------------|--------------------------------|---------------------------------------------------------
-1   | Cho phép thêm sinh viên vào           | Trả về 201 Created. Sinh viên   | Phải trả về lỗi 404 Not Found  | Dùng điều kiện `if classroom and ...` nên nếu 
-    | lớp học KHÔNG tồn tại trong hệ thống. | được thêm vào với class_id = 99.| và chặn không cho tạo.         | classroom là `None` thì toàn bộ cụm check logic bị bỏ qua.
-----|---------------------------------------|---------------------------------|--------------------------------|---------------------------------------------------------
-2   | Kiểm tra vượt số lượng tối đa bị      | Trả về 201 Created. Sĩ số lớp   | Phải trả về lỗi 400 Bad Request| Sử dụng toán tử so sánh `>` thay vì `>=`. Lớp có max là 2,
-    | sai toán tử, gây tràn sĩ số lớp học.  | tăng lên 3 vượt quá max_students| khi sĩ số hiện tại đã bằng max.| hiện tại đã có 2, khi thêm người thứ 3 thì 2 > 2 là Sai.
-----|---------------------------------------|---------------------------------|--------------------------------|---------------------------------------------------------
-3   | Kiểm tra trùng mã sinh viên bị sai    | Trả về 201 Created. Cho phép    | Phải trả về lỗi 409 Conflict   | Check trùng mã bị ràng buộc thêm điều kiện cùng lớp: 
-    | phạm vi (chỉ check trùng trong 1 lớp).| trùng mã SV001 ở lớp học khác.  | trên TOÀN BỘ hệ thống.         | `and student["class_id"] == student_data.class_id`.
------------------------------------------------------------------------------------------------------------------------------------------
 
-DỮ LIỆU MINH CHỨNG CHO CÁCH TRACE TEST CASE:
-- Test Case Lỗi 1 (Lớp không tồn tại): Gửi JSON {"student_code": "SV003", "full_name": "Test", "class_id": 99} -> Lọt qua và tạo thành công.
-- Test Case Lỗi 2 (Lớp đầy): Lớp 1 có max_students = 2, hiện có 2 sinh viên. Gửi JSON {"student_code": "SV003", "full_name": "Test", "class_id": 1} -> Vẫn tạo được sinh viên thứ 3.
-- Test Case Lỗi 3 (Trùng mã hệ thống): Gửi JSON {"student_code": "SV001", "full_name": "Test", "class_id": 2} -> Vẫn tạo thành công mã SV001 cho lớp 2.
-"""
 
-# PHẦN 2: SOURCE CODE ĐÃ ĐƯỢC VÁ LỖI LOGIC HOÀN CHỈNH
 
-from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel
 
-app = FastAPI()
 
-class StudentCreate(BaseModel):
-    student_code: str
-    full_name: str
-    class_id: int
+from sqlalchemy import Column, Integer, String, ForeignKey, Table
+from sqlalchemy.orm import relationship
+from database import Base # Giả định Base 
 
-classrooms = [
-    {
-        "id": 1,
-        "name": "FastAPI Basic",
-        "max_students": 2,
-        "status": "OPEN"
-    },
-    {
-        "id": 2,
-        "name": "Python Foundation",
-        "max_students": 3,
-        "status": "CLOSED"
-    }
-]
-
-students = [
-    {
-        "id": 1,
-        "student_code": "SV001",
-        "full_name": "Nguyễn Văn An",
-        "class_id": 1
-    },
-    {
-        "id": 2,
-        "student_code": "SV002",
-        "full_name": "Trần Minh Bình",
-        "class_id": 1
-    }
-]
-
-@app.get("/classrooms")
-def get_classrooms():
-    return classrooms
-
-@app.get("/students")
-def get_students():
-    return students
-
-@app.post(
-    "/students",
-    status_code=status.HTTP_201_CREATED
+student_course = Table(
+    "student_course", 
+    Base.metadata,
+    Column("student_id", Integer, ForeignKey("students.id"), primary_key=True),
+    Column("course_id", Integer, ForeignKey("courses.id"), primary_key=True)
 )
-def create_student(student_data: StudentCreate):
-    duplicated_student = next(
-        (
-            student
-            for student in students
-            if student["student_code"] == student_data.student_code
-        ),
-        None
-    )
-    if duplicated_student:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Mã sinh viên đã tồn tại"
-        )
 
-    classroom = next(
-        (
-            classroom
-            for classroom in classrooms
-            if classroom["id"] == student_data.class_id
-        ),
-        None
-    )
-    if not classroom:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Lớp học không tồn tại trong hệ thống"
-        )
+class Department(Base):
+    __tablename__ = "departments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
 
-    if classroom["status"] == "CLOSED":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Lớp học đã đóng"
-        )
+    students = relationship("Student", back_populates="department")
 
-    current_students = [
-        student
-        for student in students
-        if student["class_id"] == student_data.class_id
-    ]
-    if len(current_students) >= classroom["max_students"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Lớp học đã đủ số lượng tối đa"
-        )
 
-    new_student = {
-        "id": max([s["id"] for s in students], default=0) + 1,
-        "student_code": student_data.student_code,
-        "full_name": student_data.full_name,
-        "class_id": student_data.class_id
-    }
+class Student(Base):
+    __tablename__ = "students"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), nullable=False)
 
-    students.append(new_student)
-    return new_student
+    department_id = Column(Integer, ForeignKey("departments.id"))
+    department = relationship("Department", back_populates="students")
+    
+    profile = relationship("Profile", back_populates="student", uselist=False)
+    
+    courses = relationship("Course", secondary= student_course, back_populates="students")
+
+class Profile(Base):
+    __tablename__ = "profiles"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    bio = Column(String(255))
+
+    student_id = Column(Integer, ForeignKey("students.id"))
+    student = relationship("Student", back_populates="profile")
+
+class Course(Base):
+    __tablename__ = "courses"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(100), nullable=False)
+
+    students = relationship("Student", secondary= student_course, back_populates="courses")
